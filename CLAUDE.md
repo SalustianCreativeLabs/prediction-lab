@@ -28,7 +28,16 @@ fontes são públicas.
 5. **Nada de dinheiro real**: este sistema não executa ordens. Nenhum código de
    autenticação, assinatura ou envio de ordem pode existir neste repo.
 
-## Ciclo diário
+## Ciclo diário (AUTOMATIZADO)
+
+O pipeline roda sozinho via `.github/workflows/daily.yml`, 3x ao dia (cron
+05:00, 17:00 e 23:00 UTC) + `workflow_dispatch` manual. Cada run: discover →
+fetch_forecast → predict → snapshot_price, commit de `ledger/predictions.db` +
+`data/cache/` com mensagem `run: {data} {ciclo}`, e seção do ciclo na issue
+diária (gerada por `scripts/report_run.py`). Só o ciclo 05z roda `resolve.py`
+antes de tudo — `PENDENTE` não é erro (fontes atrasam; loga e segue).
+
+Ordem manual equivalente (mesma sequência, regra 1 vale igual):
 
 1. `python scripts/resolve.py` — fecha o dia anterior ANTES de qualquer coisa.
 2. `python scripts/discover.py` — mercados de temperatura ativos.
@@ -36,7 +45,38 @@ fontes são públicas.
 4. `python scripts/predict.py` — distribuição por bucket → ledger.
 5. `python scripts/snapshot_price.py` — book CLOB, edge, PAPER_BETs.
 
-Semanal: `python scripts/calibrate.py`.
+Semanal: `python scripts/calibrate.py` (segmenta por cidade, horizonte, lado
+e `run_cycle`, e compara acurácia intraday vs pré-dia).
+
+### Semântica do ledger
+
+- `predictions.run_cycle`: `05z`/`17z`/`23z` (ou `manual`); idempotência por
+  (mercado, dia, ciclo) — cada ciclo gera previsões e snapshots próprios.
+- `bets.status`: `PAPER_BET` (posição válida, única por mercado-bucket),
+  `SIGNAL_REPEAT` (mesmo sinal em ciclo posterior; fora do P&L),
+  `BET_INVALID_INTRADAY` (criada quando o dia-alvo já tinha começado no fuso
+  da estação; fora do P&L). PAPER_BET nova só nasce em horizonte real: se o
+  dia-alvo já começou na estação, previsão e snapshot são gravados, posição não.
+
+### Alarmes do workflow (sem supervisão manual)
+
+- `RESOLUTION_MISMATCH` → issue própria com label `mismatch` (prioridade
+  máxima: regra de cidade mal extraída — corrigir antes do próximo evento).
+- Exceção no pipeline (≠ pendência) → run failed + issue `pipeline-error`.
+  Falha parcial (uma cidade) não derruba as outras, mas o run sai exit 2.
+- Evento pendente >48h do fim do dia local → issue `stale-resolution`.
+
+### Finalidade da resolução (nunca pelo relógio)
+
+- Família wunderground: fecha só com ≥1 observação da estação no dia local
+  seguinte (obs via arquivo ASOS da IEM, proxy da mesma rede METAR; margem
+  até a borda do bucket oficial é logada como `OBS_SOURCE`).
+- Família hko: fecha só quando a linha do dia aparece no XML mensal do Daily
+  Extract (fonte idêntica à oficial; sem janela de revisão).
+- Família nws_timeseries (Istanbul/Moscou/Tel Aviv): FORA DO ESCOPO — pulada
+  com aviso.
+- O fechamento também exige a resolução oficial da Polymarket (Gamma), senão
+  o mismatch não seria validável.
 
 ## Fatos verificados das APIs (sondagem ao vivo, 2026-07-21)
 
@@ -58,7 +98,10 @@ Não inventar campos: se a resposta real divergir, adaptar e avisar o usuário.
 - **CLOB**: `GET https://clob.polymarket.com/book?token_id=...` (token_id por
   outcome, NUNCA condition_id). Níveis `{price, size}` como strings; o melhor
   nível fica no FIM dos arrays — calcular defensivamente best bid = max(bids),
-  best ask = min(asks).
+  best ask = min(asks). O book do token Não é ESPELHO EXATO do Sim
+  (ask_não == 1−bid_sim, verificado ao vivo) — não buscar o segundo book.
+  A CLOB aplica throttle de IP em rajadas: manter espaçamento ≥0.5s entre
+  chamadas. A IEM também devolve 429 sob rajada (retry+backoff resolve).
 - **Open-Meteo ensemble**: `https://ensemble-api.open-meteo.com/v1/ensemble`.
   Membros vêm como `hourly.temperature_2m_memberNN` + controle `temperature_2m`
   (com múltiplos modelos o nome inclui o modelo) — parsear dinamicamente toda
