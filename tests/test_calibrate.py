@@ -50,16 +50,18 @@ class TestRender(unittest.TestCase):
              "created_at": "2026-07-19T14:00:00+00:00",
              "resolved_at": "2026-07-21T09:00:00+00:00",
              "outcome": 1.0, "winner": "80-81°F", "mismatch": 0,
-             "intraday": False, "hours_to_resolution": 43.0},
+             "intraday": False, "hours_to_resolution": 43.0,
+             "run_cycle": "05z"},
             {"prediction_id": 2, "city": "nyc", "target_date": "2026-07-20",
              "bucket": "82-83°F", "prob": 0.55, "reasoning": "{}",
              "created_at": "2026-07-20T14:00:00+00:00",
              "resolved_at": "2026-07-21T09:00:00+00:00",
              "outcome": 0.0, "winner": "80-81°F", "mismatch": 0,
-             "intraday": True, "hours_to_resolution": 19.0},
+             "intraday": True, "hours_to_resolution": 19.0,
+             "run_cycle": "17z"},
         ]
         pnls = [{"city": "nyc", "side": "yes", "stake": 10.0, "pnl": 23.3,
-                 "horizon": ">24h"}]
+                 "horizon": ">24h", "run_cycle": "05z"}]
         text = render(resolved, pnls, "2026-07-21")
         for section in ("## Brier score", "## Curva de calibração",
                         "## P&L hipotético", "## Acurácia intraday vs pré-dia",

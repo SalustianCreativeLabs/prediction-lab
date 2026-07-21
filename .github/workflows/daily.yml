@@ -1,0 +1,192 @@
+name: daily
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # 05z: único ciclo que roda resolve.py antes de tudo
+    - cron: "0 17 * * *"  # 17z
+    - cron: "0 23 * * *"  # 23z
+  workflow_dispatch:
+    inputs:
+      cycle:
+        description: "Ciclo (auto deriva da hora UTC)"
+        type: choice
+        options: [auto, 05z, 17z, 23z]
+        default: auto
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: daily-pipeline
+  # sem cancel-in-progress: runs enfileiram, nunca se matam no meio de um commit
+
+env:
+  TZ: UTC
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências
+        run: pip install requests numpy
+
+      - name: Determinar ciclo
+        id: cycle
+        shell: bash
+        run: |
+          CYCLE="${{ inputs.cycle || 'auto' }}"
+          if [ "$CYCLE" = "auto" ]; then
+            H=$(date -u +%H)
+            if [ "$H" -lt 11 ]; then CYCLE=05z
+            elif [ "$H" -lt 20 ]; then CYCLE=17z
+            else CYCLE=23z; fi
+          fi
+          echo "cycle=$CYCLE" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "Ciclo: $CYCLE"
+
+      - name: Garantir labels de alarme
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create mismatch --color B60205 \
+            --description "RESOLUTION_MISMATCH: regra de cidade mal extraída" || true
+          gh label create pipeline-error --color D93F0B \
+            --description "Exceção no pipeline automatizado" || true
+          gh label create stale-resolution --color FBCA04 \
+            --description "Evento pendente de resolução há mais de 48h" || true
+
+      # PENDENTE não é erro (fontes atrasam): resolve.py sai 0 nesses casos e
+      # só sai !=0 em exceção real — que marca o run como failed (alarme 2).
+      - name: Resolver dia anterior (só 05z)
+        if: steps.cycle.outputs.cycle == '05z'
+        shell: bash
+        env:
+          RUN_CYCLE: ${{ steps.cycle.outputs.cycle }}
+        run: python scripts/resolve.py 2>&1 | tee resolve.log
+
+      - name: Descobrir mercados
+        shell: bash
+        run: python scripts/discover.py
+
+      # exit 2 = falha parcial (uma cidade fora não derruba as outras, mas o
+      # run fica vermelho para ser barulhento)
+      - name: Previsão do ensemble
+        shell: bash
+        run: python scripts/fetch_forecast.py 2>&1 | tee fetch.log
+
+      - name: Gerar previsões
+        shell: bash
+        env:
+          RUN_CYCLE: ${{ steps.cycle.outputs.cycle }}
+        run: python scripts/predict.py 2>&1 | tee predict.log
+
+      - name: Snapshot de preços + PAPER_BETs
+        shell: bash
+        env:
+          RUN_CYCLE: ${{ steps.cycle.outputs.cycle }}
+        run: python scripts/snapshot_price.py 2>&1 | tee snapshot.log
+
+      - name: Commit do ledger e cache
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ledger/predictions.db data/cache
+          git commit -m "run: ${{ steps.cycle.outputs.date }} ${{ steps.cycle.outputs.cycle }}" \
+            || { echo "nada a commitar"; exit 0; }
+          git pull --rebase origin main
+          git push
+
+      - name: Issue diária (seção do ciclo)
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_CYCLE: ${{ steps.cycle.outputs.cycle }}
+        run: |
+          TITLE="Runs diários — ${{ steps.cycle.outputs.date }}"
+          if [ "${{ steps.cycle.outputs.cycle }}" = "05z" ] && [ -f resolve.log ]; then
+            python scripts/report_run.py --resolve-log resolve.log > section.md
+          else
+            python scripts/report_run.py > section.md
+          fi
+          NUM=$(gh issue list --state open --search "in:title \"$TITLE\"" \
+                --json number,title \
+                --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
+          if [ -z "$NUM" ]; then
+            gh issue create --title "$TITLE" --body-file section.md
+          else
+            gh issue comment "$NUM" --body-file section.md
+          fi
+
+      # Alarme 1: qualquer RESOLUTION_MISMATCH -> issue própria, título explícito
+      - name: Alarme — RESOLUTION_MISMATCH
+        if: always() && steps.cycle.outputs.cycle == '05z'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f resolve.log ] || exit 0
+          grep "^RESOLUTION_MISMATCH" resolve.log | while IFS= read -r LINE; do
+            EVENT=$(echo "$LINE" | sed 's/^RESOLUTION_MISMATCH \([^:]*\):.*/\1/')
+            TITLE="RESOLUTION_MISMATCH: $EVENT"
+            EXISTS=$(gh issue list --state open --label mismatch \
+                     --search "in:title \"$TITLE\"" --json number --jq 'length')
+            if [ "$EXISTS" = "0" ]; then
+              gh issue create --title "$TITLE" --label mismatch \
+                --body "$LINE
+
+          Regra mal extraída tem prioridade máxima: revisar \`notes/market_rules/\` antes que o evento seguinte dessa cidade rode. Log completo no run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            fi
+          done
+
+      # Alarme 3: evento PENDENTE há mais de 48h do fim do dia local
+      - name: Alarme — resolução estagnada
+        if: always() && steps.cycle.outputs.cycle == '05z'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f resolve.log ] || exit 0
+          grep "^STALE_RESOLUTION" resolve.log | while IFS= read -r LINE; do
+            EVENT=$(echo "$LINE" | sed 's/^STALE_RESOLUTION \([^:]*\):.*/\1/')
+            TITLE="Resolução estagnada: $EVENT"
+            EXISTS=$(gh issue list --state open --label stale-resolution \
+                     --search "in:title \"$TITLE\"" --json number --jq 'length')
+            if [ "$EXISTS" = "0" ]; then
+              gh issue create --title "$TITLE" --label stale-resolution \
+                --body "$LINE
+
+          Fonte de observação pode ter mudado de formato ou a estação parou de reportar. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            fi
+          done
+
+      # Alarme 2 (e falhas em geral): run failed -> issue pipeline-error
+      - name: Alarme — falha do pipeline
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="pipeline-error: run ${{ steps.cycle.outputs.date }} ${{ steps.cycle.outputs.cycle }} falhou"
+          BODY="Run com falha: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Últimas linhas de erro:
+          \`\`\`
+          $(grep -h "PIPELINE_ERROR\|ERRO\|Error\|Traceback" resolve.log fetch.log predict.log snapshot.log 2>/dev/null | tail -20)
+          \`\`\`"
+          EXISTS=$(gh issue list --state open --label pipeline-error \
+                   --search "in:title \"$TITLE\"" --json number --jq 'length')
+          if [ "$EXISTS" = "0" ]; then
+            gh issue create --title "$TITLE" --label pipeline-error --body "$BODY"
+          fi

@@ -1,4 +1,3 @@
 __pycache__/
 *.pyc
-data/cache/
-ledger/*.db
+*.log

@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import (cache_dir_for, load_json, load_rules, open_ledger,
-                     today_str, utc_now)
+from _common import (cache_dir_for, current_cycle, load_json, load_rules,
+                     open_ledger, today_str, utc_now)
 
 BUCKET_RANGE_RE = re.compile(r"^(-?\d+)-(-?\d+)°([CF])$")
 BUCKET_BELOW_RE = re.compile(r"^(-?\d+)°([CF]) or (?:below|lower|less)$")
@@ -74,7 +74,7 @@ def bucket_distribution(members: list[float], bucket_labels: list[str],
 
 
 def predict_event(event: dict, forecast_entry: dict, forecast_meta: dict,
-                  conn) -> None:
+                  conn, run_cycle: str) -> None:
     labels = [b["bucket_label"] for b in event["buckets"]]
     members = list(forecast_entry["member_extremes"].values())
     rules = load_rules(event["city_slug"])
@@ -99,7 +99,8 @@ def predict_event(event: dict, forecast_entry: dict, forecast_meta: dict,
         cid = bucket["condition_id"]
         already = cur.execute(
             "SELECT 1 FROM predictions WHERE condition_id = ? "
-            "AND substr(created_at, 1, 10) = ?", (cid, created_at[:10])).fetchone()
+            "AND substr(created_at, 1, 10) = ? AND run_cycle = ?",
+            (cid, created_at[:10], run_cycle)).fetchone()
         if already:
             continue
         cur.execute(
@@ -109,11 +110,11 @@ def predict_event(event: dict, forecast_entry: dict, forecast_meta: dict,
              event["close_time"]))
         cur.execute(
             "INSERT INTO predictions (condition_id, token_id, bucket_label, "
-            "prob, n_members, dispersion, reasoning, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "prob, n_members, dispersion, reasoning, created_at, run_cycle) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (cid, bucket["token_id_yes"], bucket["bucket_label"],
              dist[bucket["bucket_label"]], len(members), dispersion, reasoning,
-             created_at))
+             created_at, run_cycle))
         inserted += 1
     conn.commit()
 
@@ -133,7 +134,10 @@ def main() -> None:
     snapshot = load_json(markets_path)
 
     conn = open_ledger()
+    run_cycle = current_cycle()
+    print(f"ciclo: {run_cycle}")
     predicted_any = False
+    had_error = False
     for event in snapshot:
         forecast_path = cache / f"forecast_{event['city_slug']}.json"
         if not forecast_path.exists():
@@ -144,13 +148,21 @@ def main() -> None:
                       and e["target_date"] == event["target_date"]), None)
         if entry is None:
             continue
-        predict_event(event, entry, forecast, conn)
-        predicted_any = True
+        try:
+            predict_event(event, entry, forecast, conn, run_cycle)
+            predicted_any = True
+        except Exception as exc:  # uma cidade fora não derruba as outras
+            had_error = True
+            print(f"PIPELINE_ERROR predict {event['city_slug']} "
+                  f"{event['side']} {event['target_date']}: {exc}",
+                  file=sys.stderr)
     conn.close()
 
     if not predicted_any:
         sys.exit("ERRO: nenhuma previsão gerada — rode fetch_forecast.py antes "
                  "e confira as cidades VALIDADO.")
+    if had_error:
+        sys.exit(2)
 
 
 if __name__ == "__main__":

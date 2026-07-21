@@ -22,8 +22,9 @@ import csv
 import io
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (GAMMA_API, http_get_json, http_get_text, load_rules,
@@ -127,6 +128,21 @@ def edge_margin(value: float, winner_label: str) -> float | None:
     return round(min(dists), 2) if dists else None
 
 
+def hours_since_day_end(target_date: str, tz_name: str) -> float:
+    """Horas desde a meia-noite local que encerrou o dia-alvo."""
+    end = datetime.fromisoformat(target_date + "T00:00:00").replace(
+        tzinfo=ZoneInfo(tz_name)) + timedelta(days=1)
+    return (utc_now() - end) / timedelta(hours=1)
+
+
+def warn_if_stale(tag: str, target_date: str, tz_name: str) -> None:
+    hours = hours_since_day_end(target_date, tz_name)
+    if hours > 48:
+        print(f"STALE_RESOLUTION {tag}: pendente há {hours:.0f}h após o fim "
+              f"do dia local (limite 48h) — investigar fonte de observação.",
+              file=sys.stderr)
+
+
 def resolve_event(conn, city: str, target_date: str, side: str,
                   buckets: list[tuple]) -> None:
     """buckets: [(condition_id, bucket_label)] do evento no ledger."""
@@ -144,6 +160,7 @@ def resolve_event(conn, city: str, target_date: str, side: str,
     if value is None or not final:
         why = "aguardando corte de finalidade" if value is not None else source
         print(f"PENDENTE {tag}: {why} — não fecho pelo relógio.")
+        warn_if_stale(tag, target_date, rules["tz"])
         return
 
     labels = [label for _, label in buckets]
@@ -152,6 +169,7 @@ def resolve_event(conn, city: str, target_date: str, side: str,
     if official is None:
         print(f"PENDENTE {tag}: Polymarket ainda não resolveu — aguardo para "
               f"validar mismatch.")
+        warn_if_stale(tag, target_date, rules["tz"])
         return
 
     mismatch = int(ours != official)
@@ -200,10 +218,18 @@ def main() -> None:
     if not pending:
         print("Nenhum mercado pendente de resolução no ledger.")
         return
+    had_error = False
     for city, target_date, side, packed in pending:
         buckets = [tuple(item.split("|", 1)) for item in packed.split(";")]
-        resolve_event(conn, city, target_date, side, buckets)
+        try:
+            resolve_event(conn, city, target_date, side, buckets)
+        except Exception as exc:  # exceção != pendência: uma cidade não derruba
+            had_error = True     # as outras, mas o run TEM que falhar (alarme)
+            print(f"PIPELINE_ERROR resolve {city} {side} {target_date}: {exc}",
+                  file=sys.stderr)
     conn.close()
+    if had_error:
+        sys.exit(2)
 
 
 if __name__ == "__main__":

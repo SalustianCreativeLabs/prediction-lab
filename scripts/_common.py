@@ -130,7 +130,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     n_members INTEGER NOT NULL,
     dispersion REAL NOT NULL,
     reasoning TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    run_cycle TEXT NOT NULL DEFAULT 'manual'
 );
 CREATE TABLE IF NOT EXISTS prices (
     prediction_id INTEGER NOT NULL REFERENCES predictions(id),
@@ -173,13 +174,34 @@ def open_ledger():
     conn = sqlite3.connect(LEDGER_DB)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(LEDGER_SCHEMA)
-    # migração idempotente: bancos criados antes da coluna status (2026-07-21)
+    # migrações idempotentes para bancos criados antes das colunas (2026-07-21)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(bets)")]
     if "status" not in cols:
         conn.execute("ALTER TABLE bets ADD COLUMN status TEXT NOT NULL "
                      "DEFAULT 'PAPER_BET'")
-        conn.commit()
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(predictions)")]
+    if "run_cycle" not in cols:
+        conn.execute("ALTER TABLE predictions ADD COLUMN run_cycle TEXT "
+                     "NOT NULL DEFAULT 'manual'")
+    conn.commit()
     return conn
+
+
+def current_cycle() -> str:
+    """Ciclo do run: RUN_CYCLE do ambiente ou derivado da hora UTC.
+
+    Cron do workflow: 05:00, 17:00, 23:00 UTC (com tolerância a atraso do GH).
+    """
+    import os
+    env = os.environ.get("RUN_CYCLE")
+    if env in ("05z", "17z", "23z"):
+        return env
+    hour = utc_now().hour
+    if hour < 11:
+        return "05z"
+    if hour < 20:
+        return "17z"
+    return "23z"
 
 
 def local_date(tz_name: str) -> str:

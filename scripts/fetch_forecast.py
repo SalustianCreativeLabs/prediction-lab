@@ -143,11 +143,18 @@ def main() -> None:
         by_city.setdefault(ev["city_slug"], []).append(ev)
 
     wanted = sys.argv[1:] or sorted(by_city)
+    had_error = False
     for city_slug in wanted:
         if city_slug not in by_city:
             print(f"PULADO {city_slug}: sem mercado ativo hoje.", file=sys.stderr)
             continue
-        fetch_city(city_slug, by_city[city_slug], out_dir)
+        try:
+            fetch_city(city_slug, by_city[city_slug], out_dir)
+        except Exception as exc:  # uma cidade fora não derruba as outras
+            had_error = True
+            print(f"PIPELINE_ERROR fetch {city_slug}: {exc}", file=sys.stderr)
+    if had_error:
+        sys.exit(2)
 
 
 if __name__ == "__main__":

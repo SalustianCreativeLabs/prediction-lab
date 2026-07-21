@@ -147,11 +147,18 @@ def snapshot(conn, snapshot_events: list[dict], today: str) -> None:
                        kelly_stake(1 - prob, ask_no))
         if bet and bet[3] > 0:
             side, entry, edge, stake = bet
+            # ciclos diferentes do mesmo dia no mesmo (mercado, bucket):
+            # a primeira posição vale, as demais são só sinal repetido
+            repeat = conn.execute(
+                "SELECT 1 FROM bets b JOIN predictions p ON p.id = b.prediction_id"
+                " WHERE p.condition_id = ? AND b.status = 'PAPER_BET'",
+                (cid,)).fetchone()
+            status = "SIGNAL_REPEAT" if repeat else "PAPER_BET"
             conn.execute("INSERT INTO bets (prediction_id, side, stake, "
-                         "entry_price) VALUES (?, ?, ?, ?)",
-                         (pid, side, stake, entry))
-            n_bets += 1
-            print(f"PAPER_BET {city} {target} {label}: {side} @ {entry:.3f} "
+                         "entry_price, status) VALUES (?, ?, ?, ?, ?)",
+                         (pid, side, stake, entry, status))
+            n_bets += status == "PAPER_BET"
+            print(f"{status} {city} {target} {label}: {side} @ {entry:.3f} "
                   f"(prob {prob:.1%}, edge {edge:+.1%}, stake ${stake:.2f})")
         conn.commit()
     done = len(rows) - n_failed

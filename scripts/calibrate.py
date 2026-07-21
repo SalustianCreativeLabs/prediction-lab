@@ -37,16 +37,19 @@ def is_intraday(created_at: str, target_date: str, tz_name: str) -> bool:
 def load_resolved(conn) -> list[dict]:
     rows = conn.execute("""
         SELECT p.id, m.city, m.target_date, p.bucket_label, p.prob, p.reasoning,
-               p.created_at, r.winning_bucket, r.resolved_at, r.mismatch_flag
+               p.created_at, r.winning_bucket, r.resolved_at, r.mismatch_flag,
+               p.run_cycle
         FROM predictions p
         JOIN markets m USING (condition_id)
         JOIN resolutions r ON r.condition_id = p.condition_id""").fetchall()
     out = []
-    for pid, city, target, label, prob, reasoning, created, winner, resolved, mm in rows:
+    for (pid, city, target, label, prob, reasoning, created, winner, resolved,
+         mm, run_cycle) in rows:
         out.append({
             "prediction_id": pid, "city": city, "target_date": target,
             "bucket": label, "prob": prob, "reasoning": reasoning,
             "created_at": created, "resolved_at": resolved,
+            "run_cycle": run_cycle,
             "outcome": 1.0 if label == winner else 0.0,
             "winner": winner, "mismatch": mm,
             "intraday": is_intraday(created, target, load_rules(city)["tz"]),
@@ -60,20 +63,21 @@ def load_resolved(conn) -> list[dict]:
 def load_bet_pnls(conn) -> list[dict]:
     rows = conn.execute("""
         SELECT m.city, b.side, b.stake, b.entry_price, p.bucket_label,
-               r.winning_bucket, p.created_at, r.resolved_at
+               r.winning_bucket, p.created_at, r.resolved_at, p.run_cycle
         FROM bets b
         JOIN predictions p ON p.id = b.prediction_id
         JOIN markets m USING (condition_id)
         JOIN resolutions r ON r.condition_id = p.condition_id
         WHERE b.status = 'PAPER_BET'""").fetchall()
     out = []
-    for city, side, stake, entry, label, winner, created, resolved in rows:
+    for city, side, stake, entry, label, winner, created, resolved, cyc in rows:
         hours = (datetime.fromisoformat(resolved)
                  - datetime.fromisoformat(created)) / timedelta(hours=1)
         out.append({
             "city": city, "side": side, "stake": stake,
             "pnl": bet_pnl(side, stake, entry, label == winner),
             "horizon": ">24h" if hours > 24 else "<24h",
+            "run_cycle": cyc,
         })
     return out
 
@@ -100,13 +104,14 @@ def render(resolved: list[dict], pnls: list[dict], today: str) -> str:
     all_pairs = [(r["prob"], r["outcome"]) for r in resolved]
     lines += ["## Brier score", "",
               f"- **Geral**: {brier(all_pairs)}", ""]
-    lines += ["| cidade | Brier | n |", "|---|---|---|"]
-    by_city = {}
-    for r in resolved:
-        by_city.setdefault(r["city"], []).append((r["prob"], r["outcome"]))
-    for city, pairs in sorted(by_city.items()):
-        lines.append(f"| {city} | {brier(pairs)} | {len(pairs)} |")
-    lines.append("")
+    for dim in ("city", "run_cycle"):
+        lines += [f"| {dim} | Brier | n |", "|---|---|---|"]
+        groups = {}
+        for r in resolved:
+            groups.setdefault(r[dim], []).append((r["prob"], r["outcome"]))
+        for key, pairs in sorted(groups.items()):
+            lines.append(f"| {key} | {brier(pairs)} | {len(pairs)} |")
+        lines.append("")
 
     lines += ["## Curva de calibração (bins de 10%)", "",
               "| bin | previsto médio | observado | n |", "|---|---|---|---|"]
@@ -129,7 +134,7 @@ def render(resolved: list[dict], pnls: list[dict], today: str) -> str:
         total = sum(b["pnl"] for b in pnls)
         lines += [f"- **Total**: ${total:+.2f} em {len(pnls)} apostas", ""]
         for title, key in (("por cidade", "city"), ("por horizonte", "horizon"),
-                           ("por lado", "side")):
+                           ("por lado", "side"), ("por ciclo", "run_cycle")):
             lines += [f"### {title}", "", "| segmento | P&L | n |", "|---|---|---|"]
             groups = {}
             for b in pnls:
