@@ -52,6 +52,20 @@ HONG_KONG_DESCRIPTION = (
 )
 
 
+class TestJsonGzipRoundtrip(unittest.TestCase):
+    def test_gz_and_plain_roundtrip(self):
+        import tempfile
+        from _common import load_json, save_json
+        data = {"cidade": "nyc", "membros": [80.1, 81.5], "ok": True}
+        with tempfile.TemporaryDirectory() as td:
+            for name in ("plain.json", "raw.json.gz"):
+                path = Path(td) / name
+                save_json(path, data)
+                self.assertEqual(load_json(path), data)
+            self.assertTrue((Path(td) / "raw.json.gz").read_bytes()
+                            .startswith(b"\x1f\x8b"))  # magic gzip
+
+
 class TestParseEventTitle(unittest.TestCase):
     def test_highest_nyc(self):
         parsed = parse_event_title("Highest temperature in NYC on July 21?",

@@ -121,7 +121,7 @@ def main() -> None:
     out_dir = cache_dir_for(date_str)
 
     raw_events = fetch_weather_events()
-    save_json(out_dir / "raw_gamma_events.json", raw_events)
+    save_json(out_dir / "raw_gamma_events.json.gz", raw_events)
 
     snapshot = build_markets_snapshot(raw_events)
     save_json(out_dir / "markets.json", snapshot)

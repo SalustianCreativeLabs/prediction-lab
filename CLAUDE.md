@@ -67,8 +67,15 @@ Não inventar campos: se a resposta real divergir, adaptar e avisar o usuário.
 
 ## Convenções
 
+- **Toda sessão de trabalho neste repo começa com `git pull`.** O cron do
+  GitHub Actions commita `ledger/predictions.db` (SQLite, binário) a cada
+  ciclo — conflito em binário não tem merge; trabalhar sobre cópia velha
+  perde runs.
+
 - Tudo em UTC internamente; converter para o fuso da estação só na lógica de
   janela diária.
 - Erros de rede: retry + backoff (ver `scripts/_common.py`).
-- Respostas brutas de API do dia vão para `data/cache/{YYYY-MM-DD}/` (auditoria).
+- Respostas brutas de API do dia vão para `data/cache/{YYYY-MM-DD}/` (auditoria),
+  comprimidas como `.json.gz` (`save_json`/`load_json` são transparentes ao
+  sufixo); `markets.json` e `forecast_*.json` ficam legíveis, sem compressão.
 - Código simples e legível vence código esperto.

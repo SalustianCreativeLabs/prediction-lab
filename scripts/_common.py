@@ -211,10 +211,21 @@ def local_date(tz_name: str) -> str:
 
 
 def save_json(path: Path, data) -> None:
+    """Grava JSON; caminhos .json.gz saem comprimidos (respostas brutas de API)."""
+    import gzip
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                    encoding="utf-8")
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    if path.suffix == ".gz":
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        path.write_text(text, encoding="utf-8")
 
 
 def load_json(path: Path):
+    """Lê JSON, transparente a .json.gz."""
+    import gzip
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return json.load(f)
     return json.loads(path.read_text(encoding="utf-8"))

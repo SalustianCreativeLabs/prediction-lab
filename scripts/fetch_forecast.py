@@ -88,7 +88,7 @@ def fetch_city(city_slug: str, events: list[dict], out_dir) -> None:
         "temperature_unit": "fahrenheit" if rules["unit"] == "F" else "celsius",
         "forecast_days": 4,
     })
-    save_json(out_dir / f"ensemble_{city_slug}.json", raw)
+    save_json(out_dir / f"ensemble_{city_slug}.json.gz", raw)
 
     fetched_at = utc_now().isoformat(timespec="seconds")
     per_event = []
