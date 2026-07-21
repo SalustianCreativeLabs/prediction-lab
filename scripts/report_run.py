@@ -41,7 +41,7 @@ def main() -> None:
     conn = open_ledger()
     rows = conn.execute("""
         SELECT m.city, m.target_date, p.bucket_label, p.prob, pr.ask,
-               COALESCE(b.status, '—') AS status
+               COALESCE(b.status, '—') AS status, b.side, b.entry_price
         FROM predictions p
         JOIN markets m USING (condition_id)
         LEFT JOIN prices pr ON pr.prediction_id = p.id
@@ -60,20 +60,37 @@ def main() -> None:
         print("\n".join(out))
         return
 
-    def fmt(r):
-        city, target, label, prob, ask, status = r
+    def fmt_market(r):
+        """Visão do lado SIM (mercado) — usada na tabela completa."""
+        city, target, label, prob, ask, status, _, _ = r
         ask_s = f"{ask:.3f}" if ask is not None else "—"
         edge_s = f"{prob - ask:+.1%}" if ask is not None else "—"
         return f"| {city} | {target} | {label} | {prob:.1%} | {ask_s} | {edge_s} | {status} |"
 
-    header = ["| cidade | data-alvo | bucket | prob | ask | edge | status |",
-              "|---|---|---|---|---|---|---|"]
+    def fmt_signal(r):
+        """Visão do LADO APOSTADO: prob, ask e edge do lado da posição."""
+        city, target, label, prob, _, status, side, entry = r
+        side_pt = "SIM" if side == "yes" else "NÃO"
+        prob_side = prob if side == "yes" else 1 - prob
+        edge = prob_side - entry
+        return (f"| {city} | {target} | {label} | {side_pt} | {prob_side:.1%} "
+                f"| {entry:.3f} | {edge:+.1%} | {status} |")
+
+    signal_header = [
+        "| cidade | data-alvo | bucket | lado | prob (lado) | ask (lado) "
+        "| edge (lado) | status |",
+        "|---|---|---|---|---|---|---|---|"]
+    full_header = ["| cidade | data-alvo | bucket | prob | ask | edge | status |",
+                   "|---|---|---|---|---|---|---|"]
     bets = [r for r in rows if r[5] != "—"]
     out += [f"{len(rows)} previsões, {len(bets)} sinais de aposta.", ""]
     if bets:
-        out += ["### Sinais", "", *header, *(fmt(r) for r in bets), ""]
-    out += ["<details><summary>Tabela completa ({} linhas)</summary>".format(len(rows)),
-            "", *header, *(fmt(r) for r in rows), "", "</details>", ""]
+        out += ["### Sinais (números do lado apostado)", "",
+                *signal_header, *(fmt_signal(r) for r in bets), ""]
+    out += ["<details><summary>Tabela completa — visão lado SIM "
+            f"({len(rows)} linhas)</summary>",
+            "", *full_header, *(fmt_market(r) for r in rows), "",
+            "</details>", ""]
     print("\n".join(out))
 
 
