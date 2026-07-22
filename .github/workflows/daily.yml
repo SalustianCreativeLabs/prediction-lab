@@ -137,7 +137,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           [ -f resolve.log ] || exit 0
-          grep "^RESOLUTION_MISMATCH" resolve.log | while IFS= read -r LINE; do
+          # sem match = dia limpo, não é erro (grep sai 1 e o pipefail mataria o step)
+          { grep "^RESOLUTION_MISMATCH" resolve.log || true; } | while IFS= read -r LINE; do
             EVENT=$(echo "$LINE" | sed 's/^RESOLUTION_MISMATCH \([^:]*\):.*/\1/')
             TITLE="RESOLUTION_MISMATCH: $EVENT"
             EXISTS=$(gh issue list --state open --label mismatch \
@@ -158,7 +159,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           [ -f resolve.log ] || exit 0
-          grep "^STALE_RESOLUTION" resolve.log | while IFS= read -r LINE; do
+          # sem match = dia limpo, não é erro (grep sai 1 e o pipefail mataria o step)
+          { grep "^STALE_RESOLUTION" resolve.log || true; } | while IFS= read -r LINE; do
             EVENT=$(echo "$LINE" | sed 's/^STALE_RESOLUTION \([^:]*\):.*/\1/')
             TITLE="Resolução estagnada: $EVENT"
             EXISTS=$(gh issue list --state open --label stale-resolution \
@@ -183,7 +185,7 @@ jobs:
 
           Últimas linhas de erro:
           \`\`\`
-          $(grep -h "PIPELINE_ERROR\|ERRO\|Error\|Traceback" resolve.log fetch.log predict.log snapshot.log 2>/dev/null | tail -20)
+          $(grep -h "PIPELINE_ERROR\|ERRO\|Error\|Traceback" resolve.log fetch.log predict.log snapshot.log 2>/dev/null | tail -20 || true)
           \`\`\`"
           EXISTS=$(gh issue list --state open --label pipeline-error \
                    --search "in:title \"$TITLE\"" --json number --jq 'length')
