@@ -78,6 +78,64 @@ e `run_cycle`, e compara acurácia intraday vs pré-dia).
 - O fechamento também exige a resolução oficial da Polymarket (Gamma), senão
   o mismatch não seria validável.
 
+## Cronograma do experimento (22/07 → 19/08/2026)
+
+Lógica permanente: expansão sempre atrás de gate (nunca por calendário),
+hipóteses baratas primeiro, parâmetro só com 2 semanas de dados e prova
+out-of-sample, semana final sem mudanças para veredito limpo. Bug se corrige
+NO DIA via issue de alarme; parâmetro só nas sessões de quarta (~9h BRT,
+sempre: `git pull` → rodar o dia → `calibrate.py` → analisar relatório).
+
+- **Semana 1 (22–28/07)**: rodar intocado com 3 cidades; só acumular
+  (~42 eventos independentes; ~130 pares evento-ciclo). Único trabalho
+  ativo: anotar padrões repetidos (suspeito nº 1: viés quente do ensemble
+  em Londres, visto dia 21, n=1).
+- **Sessão 1 (qua 29/07)**: (1) qualquer RESOLUTION_MISMATCH trava expansão;
+  (2) diagnóstico de dispersão: vencedor fora do top-3 de buckets em >30%
+  dos eventos = ensemble subdisperso — anotar, NÃO corrigir ainda;
+  (3) viés de Londres: 4+ dias pro mesmo lado = investigar como bug
+  (janela/fuso/estação) antes de assumir parâmetro; (4) NÃO vs SIM e edge
+  por ciclo, só leitura. **Gate 1** (zero mismatch + pipeline estável):
+  +4 cidades "pegadinha" — Denver-Buckley, Paris-Le Bourget, Seul-Incheon,
+  São Paulo-Guarulhos (`extract_rules.py` + validação manual de cada).
+  Antes do VALIDADO de cada uma: resolve seco contra um dia passado (a
+  estação reporta na IEM? arredondamento bate com o Wunderground?) —
+  VALIDADO errado numa pegadinha vira mismatch na semana 2 e trava o Gate 2.
+- **Semana 2 (29/07–04/08)**: 7 cidades, coleta comparativa — pegadinhas
+  se comportam diferente das líquidas (spread, edge bruto, reprecificação)?
+- **Sessão 2 (qua 05/08, dia ~14)**: primeira sessão onde parâmetro pode
+  mudar. (1) Se subdispersão confirmada: correção de dispersão no
+  `predict.py` (inflar variância por fator ajustado nas 2 semanas) — a
+  mudança de parâmetro mais importante do projeto. A correção nasce
+  segmentada por tipo de evento (máx vs mín) no mínimo: os dados do dia 21
+  já mostram mínimas calibradas e máximas subdispersas — fator global
+  estragaria as mínimas para consertar as máximas; (2) threshold de 8pp:
+  se 8-12pp perde e 15pp+ ganha, sobe para 12 (nunca desce antes do dia 30);
+  (3) primeiro veredito pegadinhas vs líquidas. **Gate 2** (calibração
+  pós-correção sã): +6-8 líquidas de volume (Xangai, Shenzhen, Pequim,
+  Milão, Amsterdã, Madri, Munique) → ~13-15 cidades.
+- **Semana 3 (05–11/08)**: a correção de dispersão melhorou o Brier
+  out-of-sample? Correção que só funciona nos dados que a geraram é
+  overfit. O julgamento usa SÓ as 7 cidades pré-Sessão 2 — as do Gate 2
+  entram no Brier geral, não no veredito da correção (senão o teste mistura
+  efeito da correção com composição de frota nova).
+- **Sessão 3 (qua 12/08)**: parar de expandir, começar a podar: ranking de
+  cidades por P&L e Brier; desativar as piores (= sair do snapshot de
+  apostas, mantendo previsão para calibração). **Gate 3 (opcional)**:
+  previsão sem apostas nas cidades restantes, só para mapa de calibração.
+- **Semana 4 (12–18/08)**: formato final, sem mudanças; última coleta.
+- **Sessão final (qua 19/08, dia 29)**: veredito pelo critério fixado desde
+  o início — existe segmento (cidade × horizonte × lado × ciclo) com edge
+  positivo consistente desde a inclusão da cidade (mínimo 2 semanas) E
+  calibração dentro de ±5pp? Guardas contra falso positivo de comparações
+  múltiplas: segmento só concorre com n ≥ 20 apostas resolvidas E história
+  mecânica plausível (ex.: divergência estação-vs-cidade) — número verde
+  sem mecanismo não leva dinheiro real.
+  Sim → só esse segmento leva dinheiro real no mês 2 (bankroll pequeno,
+  Kelly 12.5%, paper continua em paralelo como controle).
+  Não → pipeline certificado e método provado migram para os módulos de
+  entretenimento, onde a tese sempre foi mais forte.
+
 ## Fatos verificados das APIs (sondagem ao vivo, 2026-07-21)
 
 Não inventar campos: se a resposta real divergir, adaptar e avisar o usuário.
