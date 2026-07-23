@@ -77,10 +77,14 @@ def parse_rules_text(text: str) -> dict:
     tz = field(r"\*\*Fuso horário da estação\*\*:\s*([A-Za-z_]+/[A-Za-z_]+)")
     unit = field(r"\*\*Unidade\*\*:\s*°([CF])")
     icao = field(r"\*\*Código ICAO\*\*:\s*([A-Z0-9]{4})\b")
-    if "graus inteiros" in text:
-        family = "whole"
-    elif "uma casa decimal" in text:
+    # Família só pode vir da linha do campo "Regra de arredondamento" — o
+    # resto do arquivo pode citar as duas frases (ex.: hong-kong.md descreve
+    # labels "graus inteiros" mas a regra é decimal).
+    rounding = field(r"\*\*Regra de arredondamento\*\*:\s*([^\n]+)")
+    if rounding and "uma casa decimal" in rounding:
         family = "decimal_floor"
+    elif rounding and "graus inteiros" in rounding:
+        family = "whole"
     else:
         family = None
     if "wunderground.com" in text:
